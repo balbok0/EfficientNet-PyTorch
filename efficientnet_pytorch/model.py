@@ -11,30 +11,35 @@ from typing import Dict, List, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
+
 from .utils import (
-    round_filters,
-    round_repeats,
-    drop_connect,
-    get_same_padding_conv2d,
-    get_model_params,
-    efficientnet_params,
-    load_pretrained_weights,
     BlockArgs,
     GlobalParams,
     ImageShape,
-    Swish,
     MemoryEfficientSwish,
-    calculate_output_image_size
+    Swish,
+    calculate_output_image_size,
+    drop_connect,
+    efficientnet_params,
+    get_model_params,
+    get_same_padding_conv2d,
+    load_pretrained_weights,
+    round_filters,
+    round_repeats,
 )
 
-
 VALID_MODELS = (
-    'efficientnet-b0', 'efficientnet-b1', 'efficientnet-b2', 'efficientnet-b3',
-    'efficientnet-b4', 'efficientnet-b5', 'efficientnet-b6', 'efficientnet-b7',
+    'efficientnet-b0',
+    'efficientnet-b1',
+    'efficientnet-b2',
+    'efficientnet-b3',
+    'efficientnet-b4',
+    'efficientnet-b5',
+    'efficientnet-b6',
+    'efficientnet-b7',
     'efficientnet-b8',
-
     # Support the construction of 'efficientnet-l2' without pretrained weights
-    'efficientnet-l2'
+    'efficientnet-l2',
 )
 
 
@@ -86,8 +91,13 @@ class MBConvBlock(nn.Module):
         s = self._block_args.stride
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._depthwise_conv = Conv2d(
-            in_channels=oup, out_channels=oup, groups=oup,  # groups makes it depthwise
-            kernel_size=k, stride=s, bias=False)
+            in_channels=oup,
+            out_channels=oup,
+            groups=oup,  # groups makes it depthwise
+            kernel_size=k,
+            stride=s,
+            bias=False,
+        )
         self._bn1 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
         image_size = calculate_output_image_size(image_size, s)
 
@@ -158,8 +168,7 @@ class MBConvBlock(nn.Module):
 
 
 class EfficientNet(nn.Module):
-    """EfficientNet model.
-       Most easily loaded with the .from_name or .from_pretrained methods.
+    """EfficientNet model. Most easily loaded with the .from_name or .from_pretrained methods.
 
     Args:
         blocks_args (list[namedtuple]): A list of BlockArgs to construct blocks.
@@ -214,12 +223,11 @@ class EfficientNet(nn.Module):
         # Build blocks
         self._blocks = nn.ModuleList([])
         for block_args in self._blocks_args:
-
             # Update block input and output filters based on depth multiplier.
             block_args = block_args._replace(
                 input_filters=round_filters(block_args.input_filters, self._global_params),
                 output_filters=round_filters(block_args.output_filters, self._global_params),
-                num_repeat=round_repeats(block_args.num_repeat, self._global_params)
+                num_repeat=round_repeats(block_args.num_repeat, self._global_params),
             )
 
             # The first block needs to take care of stride and filter size increase.
@@ -259,8 +267,7 @@ class EfficientNet(nn.Module):
 
     @torch.jit.export
     def extract_endpoints(self, inputs: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Use convolution layer to extract features
-        from reduction levels i in [1, 2, 3, 4, 5].
+        """Use convolution layer to extract features from reduction levels i in [1, 2, 3, 4, 5].
 
         Args:
             inputs (tensor): Input tensor.
@@ -281,7 +288,7 @@ class EfficientNet(nn.Module):
                 >>> print(endpoints['reduction_5'].shape)  # torch.Size([1, 320, 7, 7])
                 >>> print(endpoints['reduction_6'].shape)  # torch.Size([1, 1280, 7, 7])
         """
-        endpoints = dict()
+        endpoints = {}
 
         # Stem
         x = self._swish(self._bn0(self._conv_stem(inputs)))
@@ -294,20 +301,20 @@ class EfficientNet(nn.Module):
                 drop_connect_rate *= float(idx) / len(self._blocks)  # scale drop connect_rate
             x = block(x, drop_connect_rate=drop_connect_rate)
             if prev_x.size(2) > x.size(2):
-                endpoints['reduction_{}'.format(len(endpoints) + 1)] = prev_x
+                endpoints[f'reduction_{len(endpoints) + 1}'] = prev_x
             elif idx == len(self._blocks) - 1:
-                endpoints['reduction_{}'.format(len(endpoints) + 1)] = x
+                endpoints[f'reduction_{len(endpoints) + 1}'] = x
             prev_x = x
 
         # Head
         x = self._swish(self._bn1(self._conv_head(x)))
-        endpoints['reduction_{}'.format(len(endpoints) + 1)] = x
+        endpoints[f'reduction_{len(endpoints) + 1}'] = x
 
         return endpoints
 
     @torch.jit.export
     def extract_features(self, inputs: torch.Tensor) -> torch.Tensor:
-        """use convolution layer to extract feature .
+        """Use convolution layer to extract feature .
 
         Args:
             inputs (tensor): Input tensor.
@@ -332,8 +339,8 @@ class EfficientNet(nn.Module):
         return x
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        """EfficientNet's forward function.
-           Calls extract_features to extract features, applies final linear layer, and returns logits.
+        """EfficientNet's forward function. Calls extract_features to extract features, applies final linear layer,
+        and returns logits.
 
         Args:
             inputs (tensor): Input tensor.
@@ -377,8 +384,15 @@ class EfficientNet(nn.Module):
         return model
 
     @classmethod
-    def from_pretrained(cls, model_name: str, weights_path: Optional[str] =None, advprop: bool = False,
-                        in_channels: int = 3, num_classes: int = 1000, **override_params) -> nn.Module:
+    def from_pretrained(
+        cls,
+        model_name: str,
+        weights_path: Optional[str] = None,
+        advprop: bool = False,
+        in_channels: int = 3,
+        num_classes: int = 1000,
+        **override_params,
+    ) -> nn.Module:
         """Create an efficientnet model according to name.
 
         Args:
@@ -406,8 +420,9 @@ class EfficientNet(nn.Module):
             A pretrained efficientnet model.
         """
         model = cls.from_name(model_name, num_classes=num_classes, **override_params)
-        load_pretrained_weights(model, model_name, weights_path=weights_path,
-                                load_fc=(num_classes == 1000), advprop=advprop)
+        load_pretrained_weights(
+            model, model_name, weights_path=weights_path, load_fc=(num_classes == 1000), advprop=advprop
+        )
         model._change_in_channels(in_channels)
         return model
 

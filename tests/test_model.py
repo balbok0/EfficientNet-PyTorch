@@ -2,16 +2,16 @@ from collections import OrderedDict
 
 import pytest
 import torch
-import torch.nn as nn
+from torch import nn
 
 from efficientnet_pytorch import EfficientNet
 
-
 # -- fixtures -------------------------------------------------------------------------------------
 
-@pytest.fixture(scope='module', params=[x for x in range(4)])
+
+@pytest.fixture(scope='module', params=list(range(4)))
 def model(request):
-    return 'efficientnet-b{}'.format(request.param)
+    return f'efficientnet-b{request.param}'
 
 
 @pytest.fixture(scope='module', params=[True, False])
@@ -26,9 +26,10 @@ def net(model, pretrained):
 
 # -- tests ----------------------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize('img_size', [224, 256, 512])
 def test_forward(net, img_size):
-    """Test `.forward()` doesn't throw an error"""
+    """Test `.forward()` doesn't throw an error."""
     data = torch.zeros((1, 3, img_size, img_size))
     output = net(data)
     assert not torch.isnan(output).any()
@@ -37,38 +38,42 @@ def test_forward(net, img_size):
 def test_dropout_training(net):
     """Test dropout `.training` is set by `.train()` on parent `nn.module`"""
     net.train()
-    assert net._dropout.training == True
+    assert net._dropout.training is True
 
 
 def test_dropout_eval(net):
     """Test dropout `.training` is set by `.eval()` on parent `nn.module`"""
     net.eval()
-    assert net._dropout.training == False
+    assert net._dropout.training is False
 
 
 def test_dropout_update(net):
     """Test dropout `.training` is updated by `.train()` and `.eval()` on parent `nn.module`"""
     net.train()
-    assert net._dropout.training == True
+    assert net._dropout.training is True
     net.eval()
-    assert net._dropout.training == False
+    assert net._dropout.training is False
     net.train()
-    assert net._dropout.training == True
+    assert net._dropout.training is True
     net.eval()
-    assert net._dropout.training == False
+    assert net._dropout.training is False
 
 
 @pytest.mark.parametrize('img_size', [224, 256, 512])
 def test_modify_dropout(net, img_size):
-    """Test ability to modify dropout and fc modules of network"""
-    dropout = nn.Sequential(OrderedDict([
-        ('_bn2', nn.BatchNorm1d(net._bn1.num_features)),
-        ('_drop1', nn.Dropout(p=net._global_params.dropout_rate)),
-        ('_linear1', nn.Linear(net._bn1.num_features, 512)),
-        ('_relu', nn.ReLU()),
-        ('_bn3', nn.BatchNorm1d(512)),
-        ('_drop2', nn.Dropout(p=net._global_params.dropout_rate / 2))
-    ]))
+    """Test ability to modify dropout and fc modules of network."""
+    dropout = nn.Sequential(
+        OrderedDict(
+            [
+                ('_bn2', nn.BatchNorm1d(net._bn1.num_features)),
+                ('_drop1', nn.Dropout(p=net._global_params.dropout_rate)),
+                ('_linear1', nn.Linear(net._bn1.num_features, 512)),
+                ('_relu', nn.ReLU()),
+                ('_bn3', nn.BatchNorm1d(512)),
+                ('_drop2', nn.Dropout(p=net._global_params.dropout_rate / 2)),
+            ]
+        )
+    )
     fc = nn.Linear(512, net._global_params.num_classes)
 
     net._dropout = dropout
@@ -81,10 +86,9 @@ def test_modify_dropout(net, img_size):
 
 @pytest.mark.parametrize('img_size', [224, 256, 512])
 def test_modify_pool(net, img_size):
-    """Test ability to modify pooling module of network"""
+    """Test ability to modify pooling module of network."""
 
     class AdaptiveMaxAvgPool(nn.Module):
-
         def __init__(self):
             super().__init__()
             self.ada_avgpool = nn.AdaptiveAvgPool2d(1)
@@ -109,7 +113,7 @@ def test_modify_pool(net, img_size):
 
 @pytest.mark.parametrize('img_size', [224, 256, 512])
 def test_extract_endpoints(net, img_size):
-    """Test `.extract_endpoints()` doesn't throw an error"""
+    """Test `.extract_endpoints()` doesn't throw an error."""
     data = torch.zeros((1, 3, img_size, img_size))
     endpoints = net.extract_endpoints(data)
     assert not torch.isnan(endpoints['reduction_1']).any()
@@ -141,6 +145,7 @@ def test_script(net, img_size):
     assert not torch.isnan(endpoints['reduction_4']).any()
     assert not torch.isnan(endpoints['reduction_5']).any()
     # torch.testing.assert_close(net_result, scripted_result)
+
 
 @pytest.mark.parametrize('img_size', [224, 256, 512])
 def test_script_freeze_optimize(net, img_size):

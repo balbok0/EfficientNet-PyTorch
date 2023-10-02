@@ -27,17 +27,16 @@ def _create_model_fn(model_name):
                 model_name=model_name_,
                 advprop=(pretrained == 'advprop'),
                 num_classes=num_classes,
-                in_channels=in_channels)
-        else:
-            model = _EfficientNet.from_name(
-                model_name=model_name_,
-                override_params={'num_classes': num_classes},
+                in_channels=in_channels,
             )
+        else:
+            model = _EfficientNet.from_name(model_name=model_name_, override_params={'num_classes': num_classes})
             model._change_in_channels(in_channels)
 
         return model
 
     return _model_fn
+
 
 for model_name in ['efficientnet_b' + str(i) for i in range(9)]:
     locals()[model_name] = _create_model_fn(model_name)

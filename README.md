@@ -12,18 +12,18 @@ model = EfficientNet.from_pretrained('efficientnet-b0')
 
 #### Update (April 2, 2021)
 
-The [EfficientNetV2 paper](https://arxiv.org/abs/2104.00298) has been released! I am working on implementing it as you read this :) 
+The [EfficientNetV2 paper](https://arxiv.org/abs/2104.00298) has been released! I am working on implementing it as you read this :)
 
 About EfficientNetV2:
-> EfficientNetV2 is a new family of convolutional networks that have faster training speed and better parameter efficiency than previous models. To develop this family of models, we use a combination of training-aware neural architecture search and scaling, to jointly optimize training speed and parameter efficiency. The models were searched from the search space enriched with new ops such as Fused-MBConv. 
+> EfficientNetV2 is a new family of convolutional networks that have faster training speed and better parameter efficiency than previous models. To develop this family of models, we use a combination of training-aware neural architecture search and scaling, to jointly optimize training speed and parameter efficiency. The models were searched from the search space enriched with new ops such as Fused-MBConv.
 
-Here is a comparison: 
+Here is a comparison:
 > <img src="https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnetv2-image.png" width="100%" />
 
 
 #### Update (Aug 25, 2020)
 
-This update adds: 
+This update adds:
  * A new `include_top` (default: `True`) option ([#208](https://github.com/lukemelas/EfficientNet-PyTorch/pull/208))
  * Continuous testing with [sotabench](https://sotabench.com/)
  * Code quality improvements and fixes ([#215](https://github.com/lukemelas/EfficientNet-PyTorch/pull/215) [#223](https://github.com/lukemelas/EfficientNet-PyTorch/pull/223))

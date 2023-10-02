@@ -6,17 +6,15 @@
 # Github repo: https://github.com/lukemelas/EfficientNet-PyTorch
 # With adjustments and added comments by workingcoder (github username).
 
-import re
 import math
-import collections
+import re
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils import model_zoo
-
 
 ################################################################################
 # Help functions for model architecture
@@ -39,15 +37,33 @@ from torch.utils import model_zoo
 
 # Parameters for the entire model (stem, all blocks, and head)
 ImageShape = Union[int, Tuple[int, int], List[int]]
-GlobalParams = collections.namedtuple('GlobalParams', [
-    'width_coefficient', 'depth_coefficient', 'image_size', 'dropout_rate',
-    'num_classes', 'batch_norm_momentum', 'batch_norm_epsilon',
-    'drop_connect_rate', 'depth_divisor', 'min_depth', 'include_top'])
+
+
+class GlobalParams(NamedTuple):
+    width_coefficient: float
+    depth_coefficient: float
+    image_size: ImageShape
+    dropout_rate: float
+    num_classes: int
+    batch_norm_momentum: float
+    batch_norm_epsilon: float
+    drop_connect_rate: float
+    depth_divisor: int
+    min_depth: int
+    include_top: bool
+
 
 # Parameters for an individual model block
-BlockArgs = collections.namedtuple('BlockArgs', [
-    'num_repeat', 'kernel_size', 'stride', 'expand_ratio',
-    'input_filters', 'output_filters', 'se_ratio', 'id_skip'])
+class BlockArgs(NamedTuple):
+    num_repeat: int
+    kernel_size: int
+    stride: Union[int, Tuple[int, int]]
+    expand_ratio: int
+    input_filters: int
+    output_filters: int
+    se_ratio: float
+    id_skip: bool
+
 
 # Set GlobalParams and BlockArgs's defaults
 GlobalParams.__new__.__defaults__ = (None,) * len(GlobalParams._fields)
@@ -84,8 +100,8 @@ class MemoryEfficientSwish(nn.Module):
 
 
 def round_filters(filters: int, global_params) -> int:
-    """Calculate and round number of filters based on width multiplier.
-       Use width_coefficient, depth_divisor and min_depth of global_params.
+    """Calculate and round number of filters based on width multiplier. Use width_coefficient, depth_divisor and
+    min_depth of global_params.
 
     Args:
         filters (int): Filters number to be calculated.
@@ -112,8 +128,8 @@ def round_filters(filters: int, global_params) -> int:
 
 
 def round_repeats(repeats: int, global_params) -> int:
-    """Calculate module's repeat number of a block based on depth multiplier.
-       Use depth_coefficient of global_params.
+    """Calculate module's repeat number of a block based on depth multiplier. Use depth_coefficient of
+    global_params.
 
     Args:
         repeats (int): num_repeat to be calculated.
@@ -168,15 +184,15 @@ def get_width_and_height_from_size(x: ImageShape) -> Tuple[int, int]:
     """
     if isinstance(x, int):
         return x, x
-    if isinstance(x, list) or isinstance(x, tuple):
+    if isinstance(x, (list, tuple)):
         return tuple(x)
     else:
-        raise TypeError()
+        raise TypeError
 
 
 def calculate_output_image_size(input_image_size: ImageShape, stride: ImageShape) -> Tuple[int, int]:
-    """Calculates the output image size when using Conv2dSamePadding with a stride.
-       Necessary for static padding. Thanks to mannatsingh for pointing this out.
+    """Calculates the output image size when using Conv2dSamePadding with a stride. Necessary for static padding.
+    Thanks to mannatsingh for pointing this out.
 
     Args:
         input_image_size (int, tuple or list): Size of input image.
@@ -199,9 +215,10 @@ def calculate_output_image_size(input_image_size: ImageShape, stride: ImageShape
 # Only when stride equals 1, can the output size be the same as input size.
 # Don't be confused by their function names ! ! !
 
+
 def get_same_padding_conv2d(image_size: Optional[ImageShape] = None):
-    """Chooses static padding if you have specified an image size, and dynamic padding otherwise.
-       Static padding is necessary for ONNX exporting of models.
+    """Chooses static padding if you have specified an image size, and dynamic padding otherwise. Static padding is
+    necessary for ONNX exporting of models.
 
     Args:
         image_size (int or tuple): Size of the image.
@@ -217,7 +234,8 @@ def get_same_padding_conv2d(image_size: Optional[ImageShape] = None):
 
 class Conv2dDynamicSamePadding(nn.Conv2d):
     """2D Convolutions like TensorFlow, for a dynamic image size.
-       The padding is operated in forward function by calculating dynamically.
+
+    The padding is operated in forward function by calculating dynamically.
     """
 
     # Tips for 'SAME' mode padding.
@@ -232,7 +250,16 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
     # If o equals i, i = floor((i+p-((k-1)*d+1))/s+1),
     # => p = (i-1)*s+((k-1)*d+1)-i
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, dilation: int = 1, groups: int = 1, bias: bool = True):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        dilation: int = 1,
+        groups: int = 1,
+        bias: bool = True,
+    ):
         super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
@@ -250,12 +277,21 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
 
 class Conv2dStaticSamePadding(nn.Conv2d):
     """2D Convolutions like TensorFlow's 'SAME' mode, with the given input image size.
-       The padding mudule is calculated in construction function, then used in forward.
+
+    The padding module is calculated in construction function, then used in forward.
     """
 
     # With the same calculation as Conv2dDynamicSamePadding
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, image_size: Optional[ImageShape] = None, **kwargs):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        image_size: Optional[ImageShape] = None,
+        **kwargs,
+    ):
         super().__init__(in_channels, out_channels, kernel_size, stride, **kwargs)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
@@ -268,8 +304,7 @@ class Conv2dStaticSamePadding(nn.Conv2d):
         pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
         if pad_h > 0 or pad_w > 0:
-            self.static_padding = nn.ZeroPad2d((pad_w // 2, pad_w - pad_w // 2,
-                                                pad_h // 2, pad_h - pad_h // 2))
+            self.static_padding = nn.ZeroPad2d((pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2))
         else:
             self.static_padding = nn.Identity()
 
@@ -280,8 +315,8 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
 
 def get_same_padding_maxPool2d(image_size: Optional[ImageShape] = None):
-    """Chooses static padding if you have specified an image size, and dynamic padding otherwise.
-       Static padding is necessary for ONNX exporting of models.
+    """Chooses static padding if you have specified an image size, and dynamic padding otherwise. Static padding is
+    necessary for ONNX exporting of models.
 
     Args:
         image_size (int or tuple): Size of the image.
@@ -297,10 +332,19 @@ def get_same_padding_maxPool2d(image_size: Optional[ImageShape] = None):
 
 class MaxPool2dDynamicSamePadding(nn.MaxPool2d):
     """2D MaxPooling like TensorFlow's 'SAME' mode, with a dynamic image size.
-       The padding is operated in forward function by calculating dynamically.
+
+    The padding is operated in forward function by calculating dynamically.
     """
 
-    def __init__(self, kernel_size: int, stride: int, padding: int = 0, dilation: int = 1, return_indices: bool = False, ceil_mode: bool = False):
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int,
+        padding: int = 0,
+        dilation: int = 1,
+        return_indices: bool = False,
+        ceil_mode: bool = False,
+    ):
         super().__init__(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
         self.stride = [self.stride] * 2 if isinstance(self.stride, int) else self.stride
         self.kernel_size = [self.kernel_size] * 2 if isinstance(self.kernel_size, int) else self.kernel_size
@@ -315,13 +359,15 @@ class MaxPool2dDynamicSamePadding(nn.MaxPool2d):
         pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
         if pad_h > 0 or pad_w > 0:
             x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
-        return F.max_pool2d(x, self.kernel_size, self.stride, self.padding,
-                            self.dilation, self.ceil_mode, self.return_indices)
+        return F.max_pool2d(
+            x, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode, self.return_indices
+        )
 
 
 class MaxPool2dStaticSamePadding(nn.MaxPool2d):
     """2D MaxPooling like TensorFlow's 'SAME' mode, with the given input image size.
-       The padding mudule is calculated in construction function, then used in forward.
+
+    The padding module is calculated in construction function, then used in forward.
     """
 
     def __init__(self, kernel_size: int, stride: int, image_size: Optional[ImageShape] = None, **kwargs):
@@ -345,8 +391,9 @@ class MaxPool2dStaticSamePadding(nn.MaxPool2d):
 
     def forward(self, x):
         x = self.static_padding(x)
-        x = F.max_pool2d(x, self.kernel_size, self.stride, self.padding,
-                         self.dilation, self.ceil_mode, self.return_indices)
+        x = F.max_pool2d(
+            x, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode, self.return_indices
+        )
         return x
 
 
@@ -361,10 +408,9 @@ class MaxPool2dStaticSamePadding(nn.MaxPool2d):
 # url_map and url_map_advprop: Dicts of url_map for pretrained weights
 # load_pretrained_weights: A function to load pretrained weights
 
-class BlockDecoder(object):
-    """Block Decoder for readability,
-       straight from the official TensorFlow repository.
-    """
+
+class BlockDecoder:
+    """Block Decoder for readability, straight from the official TensorFlow repository."""
 
     @staticmethod
     def _decode_block_string(block_string: str) -> BlockArgs:
@@ -388,8 +434,9 @@ class BlockDecoder(object):
                 options[key] = value
 
         # Check stride
-        assert (('s' in options and len(options['s']) == 1) or
-                (len(options['s']) == 2 and options['s'][0] == options['s'][1]))
+        assert ('s' in options and len(options['s']) == 1) or (
+            len(options['s']) == 2 and options['s'][0] == options['s'][1]
+        )
 
         return BlockArgs(
             num_repeat=int(options['r']),
@@ -399,7 +446,8 @@ class BlockDecoder(object):
             input_filters=int(options['i']),
             output_filters=int(options['o']),
             se_ratio=float(options['se']) if 'se' in options else None,
-            id_skip=('noskip' not in block_string))
+            id_skip=('noskip' not in block_string),
+        )
 
     @staticmethod
     def _encode_block_string(block: BlockArgs) -> str:
@@ -417,7 +465,7 @@ class BlockDecoder(object):
             's%d%d' % (block.strides[0], block.strides[1]),
             'e%s' % block.expand_ratio,
             'i%d' % block.input_filters,
-            'o%d' % block.output_filters
+            'o%d' % block.output_filters,
         ]
         if 0 < block.se_ratio <= 1:
             args.append('se%s' % block.se_ratio)
@@ -525,7 +573,6 @@ def efficientnet(
         depth_coefficient=depth_coefficient,
         image_size=image_size,
         dropout_rate=dropout_rate,
-
         num_classes=num_classes,
         batch_norm_momentum=0.99,
         batch_norm_epsilon=1e-3,
@@ -552,9 +599,10 @@ def get_model_params(model_name: str, override_params: Dict[str, Any]) -> Tuple[
         w, d, s, p = efficientnet_params(model_name)
         # note: all models have drop connect rate = 0.2
         blocks_args, global_params = efficientnet(
-            width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s)
+            width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s
+        )
     else:
-        raise NotImplementedError('model name is not pre-defined: {}'.format(model_name))
+        raise NotImplementedError(f'model name is not pre-defined: {model_name}')
     if override_params:
         # ValueError will be raised here if override_params has fields not included in global_params.
         global_params = global_params._replace(**override_params)
@@ -591,7 +639,14 @@ url_map_advprop = {
 # TODO: add the petrained weights url map of 'efficientnet-l2'
 
 
-def load_pretrained_weights(model: nn.Module, model_name: str, weights_path: Optional[str] = None, load_fc: bool = True, advprop: bool = False, verbose: bool = True):
+def load_pretrained_weights(
+    model: nn.Module,
+    model_name: str,
+    weights_path: Optional[str] = None,
+    load_fc: bool = True,
+    advprop: bool = False,
+    verbose: bool = True,
+):
     """Loads pretrained weights from weights path or download using url.
 
     Args:
@@ -613,14 +668,16 @@ def load_pretrained_weights(model: nn.Module, model_name: str, weights_path: Opt
 
     if load_fc:
         ret = model.load_state_dict(state_dict, strict=False)
-        assert not ret.missing_keys, 'Missing keys when loading pretrained weights: {}'.format(ret.missing_keys)
+        assert not ret.missing_keys, f'Missing keys when loading pretrained weights: {ret.missing_keys}'
     else:
         state_dict.pop('_fc.weight')
         state_dict.pop('_fc.bias')
         ret = model.load_state_dict(state_dict, strict=False)
-        assert set(ret.missing_keys) == set(
-            ['_fc.weight', '_fc.bias']), 'Missing keys when loading pretrained weights: {}'.format(ret.missing_keys)
-    assert not ret.unexpected_keys, 'Missing keys when loading pretrained weights: {}'.format(ret.unexpected_keys)
+        assert set(ret.missing_keys) == {
+            '_fc.weight',
+            '_fc.bias',
+        }, f'Missing keys when loading pretrained weights: {ret.missing_keys}'
+    assert not ret.unexpected_keys, f'Missing keys when loading pretrained weights: {ret.unexpected_keys}'
 
     if verbose:
-        print('Loaded pretrained weights for {}'.format(model_name))
+        print(f'Loaded pretrained weights for {model_name}')
