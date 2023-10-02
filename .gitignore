@@ -1,6 +1,10 @@
-# Custom 
+# Custom
 tmp
 *.pkl
+
+# IDE
+.vscode/
+*.sqlite3
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
