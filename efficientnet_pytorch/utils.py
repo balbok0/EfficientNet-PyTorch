@@ -10,6 +10,8 @@ import re
 import math
 import collections
 from functools import partial
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -36,6 +38,7 @@ from torch.utils import model_zoo
 #     but can be used in other model (such as EfficientDet).
 
 # Parameters for the entire model (stem, all blocks, and head)
+ImageShape = Union[int, Tuple[int, int], List[int]]
 GlobalParams = collections.namedtuple('GlobalParams', [
     'width_coefficient', 'depth_coefficient', 'image_size', 'dropout_rate',
     'num_classes', 'batch_norm_momentum', 'batch_norm_epsilon',
@@ -80,7 +83,7 @@ class MemoryEfficientSwish(nn.Module):
         return SwishImplementation.apply(x)
 
 
-def round_filters(filters, global_params):
+def round_filters(filters: int, global_params) -> int:
     """Calculate and round number of filters based on width multiplier.
        Use width_coefficient, depth_divisor and min_depth of global_params.
 
@@ -108,7 +111,7 @@ def round_filters(filters, global_params):
     return int(new_filters)
 
 
-def round_repeats(repeats, global_params):
+def round_repeats(repeats: int, global_params) -> int:
     """Calculate module's repeat number of a block based on depth multiplier.
        Use depth_coefficient of global_params.
 
@@ -126,7 +129,7 @@ def round_repeats(repeats, global_params):
     return int(math.ceil(multiplier * repeats))
 
 
-def drop_connect(inputs, p, training):
+def drop_connect(inputs: torch.Tensor, p: float, training: bool) -> torch.Tensor:
     """Drop connect.
 
     Args:
@@ -154,7 +157,7 @@ def drop_connect(inputs, p, training):
     return output
 
 
-def get_width_and_height_from_size(x):
+def get_width_and_height_from_size(x: ImageShape) -> Tuple[int, int]:
     """Obtain height and width from x.
 
     Args:
@@ -166,12 +169,12 @@ def get_width_and_height_from_size(x):
     if isinstance(x, int):
         return x, x
     if isinstance(x, list) or isinstance(x, tuple):
-        return x
+        return tuple(x)
     else:
         raise TypeError()
 
 
-def calculate_output_image_size(input_image_size, stride):
+def calculate_output_image_size(input_image_size: ImageShape, stride: ImageShape) -> Tuple[int, int]:
     """Calculates the output image size when using Conv2dSamePadding with a stride.
        Necessary for static padding. Thanks to mannatsingh for pointing this out.
 
@@ -188,7 +191,7 @@ def calculate_output_image_size(input_image_size, stride):
     stride = stride if isinstance(stride, int) else stride[0]
     image_height = int(math.ceil(image_height / stride))
     image_width = int(math.ceil(image_width / stride))
-    return [image_height, image_width]
+    return image_height, image_width
 
 
 # Note:
@@ -196,7 +199,7 @@ def calculate_output_image_size(input_image_size, stride):
 # Only when stride equals 1, can the output size be the same as input size.
 # Don't be confused by their function names ! ! !
 
-def get_same_padding_conv2d(image_size=None):
+def get_same_padding_conv2d(image_size: Optional[ImageShape] = None):
     """Chooses static padding if you have specified an image size, and dynamic padding otherwise.
        Static padding is necessary for ONNX exporting of models.
 
@@ -229,7 +232,7 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
     # If o equals i, i = floor((i+p-((k-1)*d+1))/s+1),
     # => p = (i-1)*s+((k-1)*d+1)-i
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, dilation: int = 1, groups: int = 1, bias: bool = True):
         super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
@@ -252,7 +255,7 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
     # With the same calculation as Conv2dDynamicSamePadding
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, image_size=None, **kwargs):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, image_size: Optional[ImageShape] = None, **kwargs):
         super().__init__(in_channels, out_channels, kernel_size, stride, **kwargs)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
@@ -276,7 +279,7 @@ class Conv2dStaticSamePadding(nn.Conv2d):
         return x
 
 
-def get_same_padding_maxPool2d(image_size=None):
+def get_same_padding_maxPool2d(image_size: Optional[ImageShape] = None):
     """Chooses static padding if you have specified an image size, and dynamic padding otherwise.
        Static padding is necessary for ONNX exporting of models.
 
@@ -297,7 +300,7 @@ class MaxPool2dDynamicSamePadding(nn.MaxPool2d):
        The padding is operated in forward function by calculating dynamically.
     """
 
-    def __init__(self, kernel_size, stride, padding=0, dilation=1, return_indices=False, ceil_mode=False):
+    def __init__(self, kernel_size: int, stride: int, padding: int = 0, dilation: int = 1, return_indices: bool = False, ceil_mode: bool = False):
         super().__init__(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
         self.stride = [self.stride] * 2 if isinstance(self.stride, int) else self.stride
         self.kernel_size = [self.kernel_size] * 2 if isinstance(self.kernel_size, int) else self.kernel_size
@@ -321,7 +324,7 @@ class MaxPool2dStaticSamePadding(nn.MaxPool2d):
        The padding mudule is calculated in construction function, then used in forward.
     """
 
-    def __init__(self, kernel_size, stride, image_size=None, **kwargs):
+    def __init__(self, kernel_size: int, stride: int, image_size: Optional[ImageShape] = None, **kwargs):
         super().__init__(kernel_size, stride, **kwargs)
         self.stride = [self.stride] * 2 if isinstance(self.stride, int) else self.stride
         self.kernel_size = [self.kernel_size] * 2 if isinstance(self.kernel_size, int) else self.kernel_size
@@ -364,7 +367,7 @@ class BlockDecoder(object):
     """
 
     @staticmethod
-    def _decode_block_string(block_string):
+    def _decode_block_string(block_string: str) -> BlockArgs:
         """Get a block through a string notation of arguments.
 
         Args:
@@ -399,7 +402,7 @@ class BlockDecoder(object):
             id_skip=('noskip' not in block_string))
 
     @staticmethod
-    def _encode_block_string(block):
+    def _encode_block_string(block: BlockArgs) -> str:
         """Encode a block to a string.
 
         Args:
@@ -423,7 +426,7 @@ class BlockDecoder(object):
         return '_'.join(args)
 
     @staticmethod
-    def decode(string_list):
+    def decode(string_list: List[str]) -> List[BlockArgs]:
         """Decode a list of string notations to specify blocks inside the network.
 
         Args:
@@ -439,7 +442,7 @@ class BlockDecoder(object):
         return blocks_args
 
     @staticmethod
-    def encode(blocks_args):
+    def encode(blocks_args: List[BlockArgs]) -> List[str]:
         """Encode a list of BlockArgs to a list of strings.
 
         Args:
@@ -454,7 +457,7 @@ class BlockDecoder(object):
         return block_strings
 
 
-def efficientnet_params(model_name):
+def efficientnet_params(model_name: str) -> Tuple[float, float, int, float]:
     """Map EfficientNet model name to parameter coefficients.
 
     Args:
@@ -479,8 +482,15 @@ def efficientnet_params(model_name):
     return params_dict[model_name]
 
 
-def efficientnet(width_coefficient=None, depth_coefficient=None, image_size=None,
-                 dropout_rate=0.2, drop_connect_rate=0.2, num_classes=1000, include_top=True):
+def efficientnet(
+    width_coefficient: Optional[float] = None,
+    depth_coefficient: Optional[float] = None,
+    image_size: Optional[float] = None,
+    dropout_rate: float = 0.2,
+    drop_connect_rate: float = 0.2,
+    num_classes: int = 1000,
+    include_top: bool = True,
+) -> Tuple[BlockArgs, GlobalParams]:
     """Create BlockArgs and GlobalParams for efficientnet model.
 
     Args:
@@ -528,7 +538,7 @@ def efficientnet(width_coefficient=None, depth_coefficient=None, image_size=None
     return blocks_args, global_params
 
 
-def get_model_params(model_name, override_params):
+def get_model_params(model_name: str, override_params: Dict[str, Any]) -> Tuple[BlockArgs, GlobalParams]:
     """Get the block args and global params for a given model name.
 
     Args:
@@ -581,7 +591,7 @@ url_map_advprop = {
 # TODO: add the petrained weights url map of 'efficientnet-l2'
 
 
-def load_pretrained_weights(model, model_name, weights_path=None, load_fc=True, advprop=False, verbose=True):
+def load_pretrained_weights(model: nn.Module, model_name: str, weights_path: Optional[str] = None, load_fc: bool = True, advprop: bool = False, verbose: bool = True):
     """Loads pretrained weights from weights path or download using url.
 
     Args:

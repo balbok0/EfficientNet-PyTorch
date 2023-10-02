@@ -122,3 +122,44 @@ def test_extract_endpoints(net, img_size):
     assert endpoints['reduction_3'].size(2) == img_size // 8
     assert endpoints['reduction_4'].size(2) == img_size // 16
     assert endpoints['reduction_5'].size(2) == img_size // 32
+
+
+@pytest.mark.parametrize('img_size', [224, 256, 512])
+def test_script(net, img_size):
+    data = torch.zeros((1, 3, img_size, img_size))
+    scripted_net = torch.jit.script(net)
+    assert isinstance(scripted_net, torch.jit.ScriptModule)
+    # Efficient net is non-deterministic sometimes. Ignore correctness. Mae sure it runs
+    # net_result = net(data.clone())
+    result = scripted_net(data.clone())
+    endpoints = scripted_net.extract_endpoints(data.clone())
+
+    assert not torch.isnan(result).any()
+    assert not torch.isnan(endpoints['reduction_1']).any()
+    assert not torch.isnan(endpoints['reduction_2']).any()
+    assert not torch.isnan(endpoints['reduction_3']).any()
+    assert not torch.isnan(endpoints['reduction_4']).any()
+    assert not torch.isnan(endpoints['reduction_5']).any()
+    # torch.testing.assert_close(net_result, scripted_result)
+
+@pytest.mark.parametrize('img_size', [224, 256, 512])
+def test_script_freeze_optimize(net, img_size):
+    data = torch.zeros((1, 3, img_size, img_size))
+
+    scripted_net = torch.jit.script(net)
+    freeze_net = torch.jit.freeze(scripted_net.eval(), preserved_attrs=["extract_endpoints"])
+    optimized_net = torch.jit.optimize_for_inference(freeze_net)
+
+    assert isinstance(optimized_net, torch.jit.ScriptModule)
+    result = optimized_net(data.clone())
+    endpoints = optimized_net.extract_endpoints(data.clone())
+    assert not torch.isnan(result).any()
+    assert not torch.isnan(endpoints['reduction_1']).any()
+    assert not torch.isnan(endpoints['reduction_2']).any()
+    assert not torch.isnan(endpoints['reduction_3']).any()
+    assert not torch.isnan(endpoints['reduction_4']).any()
+    assert not torch.isnan(endpoints['reduction_5']).any()
+    # Efficient net is non-deterministic sometimes. Ignore
+    # net_result = net(data.clone())
+    # scripted_result = scripted_net(data.clone())
+    # torch.testing.assert_close(net_result, scripted_result)

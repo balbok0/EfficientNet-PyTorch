@@ -6,6 +6,8 @@
 # Github repo: https://github.com/lukemelas/EfficientNet-PyTorch
 # With adjustments and added comments by workingcoder (github username).
 
+from typing import Dict, List, Optional
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -17,6 +19,9 @@ from .utils import (
     get_model_params,
     efficientnet_params,
     load_pretrained_weights,
+    BlockArgs,
+    GlobalParams,
+    ImageShape,
     Swish,
     MemoryEfficientSwish,
     calculate_output_image_size
@@ -47,9 +52,19 @@ class MBConvBlock(nn.Module):
         [3] https://arxiv.org/abs/1905.02244 (MobileNet v3)
     """
 
-    def __init__(self, block_args, global_params, image_size=None):
+    def __init__(self, block_args: BlockArgs, global_params: GlobalParams, image_size: Optional[ImageShape] = None):
         super().__init__()
-        self._block_args = block_args
+        self._block_args: BlockArgs = block_args
+        # NOTE: torch.jit.script does not handle named tuples well, so we need to unpack them for readable code
+        self._num_repeat = block_args.num_repeat
+        self._kernel_size = block_args.kernel_size
+        self._stride = block_args.stride
+        self._expand_ratio = block_args.expand_ratio
+        self._input_filters = block_args.input_filters
+        self._output_filters = block_args.output_filters
+        self._se_ratio = block_args.se_ratio
+        self._id_skip = block_args.id_skip
+
         self._bn_mom = 1 - global_params.batch_norm_momentum  # pytorch's difference from tensorflow
         self._bn_eps = global_params.batch_norm_epsilon
         self.has_se = (self._block_args.se_ratio is not None) and (0 < self._block_args.se_ratio <= 1)
@@ -58,6 +73,8 @@ class MBConvBlock(nn.Module):
         # Expansion phase (Inverted Bottleneck)
         inp = self._block_args.input_filters  # number of input channels
         oup = self._block_args.input_filters * self._block_args.expand_ratio  # number of output channels
+        self._expand_conv: Optional[nn.Module] = None
+        self._bn0: Optional[nn.Module] = None
         if self._block_args.expand_ratio != 1:
             Conv2d = get_same_padding_conv2d(image_size=image_size)
             self._expand_conv = Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
@@ -86,14 +103,14 @@ class MBConvBlock(nn.Module):
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
-        self._swish = MemoryEfficientSwish()
+        self._swish: nn.Module = MemoryEfficientSwish()
 
-    def forward(self, inputs, drop_connect_rate=None):
+    def forward(self, inputs: torch.Tensor, drop_connect_rate: Optional[float] = None):
         """MBConvBlock's forward function.
 
         Args:
             inputs (tensor): Input tensor.
-            drop_connect_rate (bool): Drop connect rate (float, between 0 and 1).
+            drop_connect_rate (float): Drop connect rate (float, between 0 and 1).
 
         Returns:
             Output of this block after processing.
@@ -101,7 +118,7 @@ class MBConvBlock(nn.Module):
 
         # Expansion and Depthwise Convolution
         x = inputs
-        if self._block_args.expand_ratio != 1:
+        if self._expand_ratio != 1 and self._expand_conv is not None and self._bn0 is not None:
             x = self._expand_conv(inputs)
             x = self._bn0(x)
             x = self._swish(x)
@@ -123,15 +140,15 @@ class MBConvBlock(nn.Module):
         x = self._bn2(x)
 
         # Skip connection and drop connect
-        input_filters, output_filters = self._block_args.input_filters, self._block_args.output_filters
-        if self.id_skip and self._block_args.stride == 1 and input_filters == output_filters:
+        input_filters, output_filters = self._input_filters, self._output_filters
+        if self.id_skip and self._stride == 1 and input_filters == output_filters:
             # The combination of skip connection and drop connect brings about stochastic depth.
-            if drop_connect_rate:
+            if drop_connect_rate is not None:
                 x = drop_connect(x, p=drop_connect_rate, training=self.training)
             x = x + inputs  # skip connection
         return x
 
-    def set_swish(self, memory_efficient=True):
+    def set_swish(self, memory_efficient: bool = True):
         """Sets swish function as memory efficient (for training) or standard (for export).
 
         Args:
@@ -160,12 +177,24 @@ class EfficientNet(nn.Module):
         >>> outputs = model(inputs)
     """
 
-    def __init__(self, blocks_args=None, global_params=None):
+    def __init__(self, blocks_args: List[BlockArgs], global_params: GlobalParams):
         super().__init__()
         assert isinstance(blocks_args, list), 'blocks_args should be a list'
         assert len(blocks_args) > 0, 'block args must be greater than 0'
         self._global_params = global_params
         self._blocks_args = blocks_args
+        # NOTE: torch.jit.script does not handle named tuples well, so we need to unpack them for readable code
+        self._width_coefficient = global_params.width_coefficient
+        self._depth_coefficient = global_params.depth_coefficient
+        self._image_size = global_params.image_size
+        self._dropout_rate = global_params.dropout_rate
+        self._num_classes = global_params.num_classes
+        self._batch_norm_momentum = global_params.batch_norm_momentum
+        self._batch_norm_epsilon = global_params.batch_norm_epsilon
+        self._drop_connect_rate = global_params.drop_connect_rate
+        self._depth_divisor = global_params.depth_divisor
+        self._min_depth = global_params.min_depth
+        self._include_top = global_params.include_top
 
         # Batch norm parameters
         bn_mom = 1 - self._global_params.batch_norm_momentum
@@ -216,9 +245,9 @@ class EfficientNet(nn.Module):
             self._fc = nn.Linear(out_channels, self._global_params.num_classes)
 
         # set activation to memory efficient swish by default
-        self._swish = MemoryEfficientSwish()
+        self._swish: nn.Module = MemoryEfficientSwish()
 
-    def set_swish(self, memory_efficient=True):
+    def set_swish(self, memory_efficient: bool = True):
         """Sets swish function as memory efficient (for training) or standard (for export).
 
         Args:
@@ -228,7 +257,8 @@ class EfficientNet(nn.Module):
         for block in self._blocks:
             block.set_swish(memory_efficient)
 
-    def extract_endpoints(self, inputs):
+    @torch.jit.export
+    def extract_endpoints(self, inputs: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Use convolution layer to extract features
         from reduction levels i in [1, 2, 3, 4, 5].
 
@@ -259,7 +289,7 @@ class EfficientNet(nn.Module):
 
         # Blocks
         for idx, block in enumerate(self._blocks):
-            drop_connect_rate = self._global_params.drop_connect_rate
+            drop_connect_rate = self._drop_connect_rate
             if drop_connect_rate:
                 drop_connect_rate *= float(idx) / len(self._blocks)  # scale drop connect_rate
             x = block(x, drop_connect_rate=drop_connect_rate)
@@ -275,7 +305,8 @@ class EfficientNet(nn.Module):
 
         return endpoints
 
-    def extract_features(self, inputs):
+    @torch.jit.export
+    def extract_features(self, inputs: torch.Tensor) -> torch.Tensor:
         """use convolution layer to extract feature .
 
         Args:
@@ -290,7 +321,7 @@ class EfficientNet(nn.Module):
 
         # Blocks
         for idx, block in enumerate(self._blocks):
-            drop_connect_rate = self._global_params.drop_connect_rate
+            drop_connect_rate = self._drop_connect_rate
             if drop_connect_rate:
                 drop_connect_rate *= float(idx) / len(self._blocks)  # scale drop connect_rate
             x = block(x, drop_connect_rate=drop_connect_rate)
@@ -300,7 +331,7 @@ class EfficientNet(nn.Module):
 
         return x
 
-    def forward(self, inputs):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """EfficientNet's forward function.
            Calls extract_features to extract features, applies final linear layer, and returns logits.
 
@@ -314,14 +345,14 @@ class EfficientNet(nn.Module):
         x = self.extract_features(inputs)
         # Pooling and final linear layer
         x = self._avg_pooling(x)
-        if self._global_params.include_top:
+        if self._include_top:
             x = x.flatten(start_dim=1)
             x = self._dropout(x)
             x = self._fc(x)
         return x
 
     @classmethod
-    def from_name(cls, model_name, in_channels=3, **override_params):
+    def from_name(cls, model_name: str, in_channels: int = 3, **override_params):
         """Create an efficientnet model according to name.
 
         Args:
@@ -346,8 +377,8 @@ class EfficientNet(nn.Module):
         return model
 
     @classmethod
-    def from_pretrained(cls, model_name, weights_path=None, advprop=False,
-                        in_channels=3, num_classes=1000, **override_params):
+    def from_pretrained(cls, model_name: str, weights_path: Optional[str] =None, advprop: bool = False,
+                        in_channels: int = 3, num_classes: int = 1000, **override_params) -> nn.Module:
         """Create an efficientnet model according to name.
 
         Args:
@@ -381,7 +412,7 @@ class EfficientNet(nn.Module):
         return model
 
     @classmethod
-    def get_image_size(cls, model_name):
+    def get_image_size(cls, model_name: str) -> int:
         """Get the input image size for a given efficientnet model.
 
         Args:
@@ -395,7 +426,7 @@ class EfficientNet(nn.Module):
         return res
 
     @classmethod
-    def _check_model_name_is_valid(cls, model_name):
+    def _check_model_name_is_valid(cls, model_name: str) -> bool:
         """Validates model name.
 
         Args:
@@ -407,13 +438,13 @@ class EfficientNet(nn.Module):
         if model_name not in VALID_MODELS:
             raise ValueError('model_name should be one of: ' + ', '.join(VALID_MODELS))
 
-    def _change_in_channels(self, in_channels):
+    def _change_in_channels(self, in_channels: int):
         """Adjust model's first convolution layer to in_channels, if in_channels not equals 3.
 
         Args:
             in_channels (int): Input data's channel number.
         """
         if in_channels != 3:
-            Conv2d = get_same_padding_conv2d(image_size=self._global_params.image_size)
+            Conv2d = get_same_padding_conv2d(image_size=self._image_size)
             out_channels = round_filters(32, self._global_params)
             self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
