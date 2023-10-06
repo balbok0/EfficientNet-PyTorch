@@ -19,7 +19,7 @@ REQUIRES_PYTHON = '>=3.5.0'
 VERSION = '0.7.2'
 
 # What packages are required for this module to be executed?
-REQUIRED = ['torch']
+REQUIRED = []  # No requirements so that we are not conflicting with random torch versions (cuda, rocm, cpu etc)
 
 # What packages are optional?
 EXTRAS = {
